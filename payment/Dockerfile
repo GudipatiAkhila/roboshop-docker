@@ -1,28 +1,57 @@
-FROM maven:3.9.11 AS builder
+# ===========================
+# Stage 1: Builder (Alpine)
+# ===========================
+FROM python:3.9.25-alpine3.21 AS builder
 WORKDIR /opt/server
-COPY pom.xml .
-COPY src ./src
-RUN mvn clean package && \
-    mv target/shipping-1.0.jar shipping.jar
+# Build deps for uwsgi & friends
+RUN apk add --no-cache \
+    build-base \
+    linux-headers \
+    pcre-dev
+# Only requirements first for caching
+COPY requirements.txt .
+# Install into /install (just like you did)
+RUN pip3 install --prefix=/install -r requirements.txt
 
 
-FROM eclipse-temurin:17-jre-alpine
+# ===========================
+# Stage 2: Runtime (Alpine)
+# ===========================
+FROM python:3.9.25-alpine3.21
 EXPOSE 8080
-RUN addgroup -S roboshop && adduser -S roboshop -G roboshop
 WORKDIR /opt/server
-ENV CART_ENDPOINT="cart:8080" \
-    DB_HOST="mysql"
-COPY --from=builder --chown=roboshop:roboshop /opt/server/shipping.jar .
+# Runtime deps only
+RUN apk add --no-cache pcre
+# Create non-root user
+RUN addgroup -S roboshop && adduser -S roboshop -G roboshop
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+# Copy app files
+COPY --chown=roboshop:roboshop payment.ini *.py requirements.txt .
+ENV CART_HOST="cart" \
+    CART_PORT="8080" \
+    USER_HOST="user" \
+    USER_PORT="8080" \
+    AMQP_HOST="rabbitmq" \
+    AMQP_USER="roboshop" \
+    AMQP_PASS="roboshop123"
+
 USER roboshop
-ENTRYPOINT ["sh", "-c", "sleep 30 && java -jar shipping.jar"]
-# FROM maven:3.9.11
+CMD ["uwsgi", "--ini", "payment.ini"]
+
+
+# FROM python:3.9
 # EXPOSE 8080
 # WORKDIR /opt/server
-# COPY pom.xml .
-# COPY src ./src
-# RUN mvn clean package
-# RUN mv target/shipping-1.0.jar shipping.jar
-# ENV CART_ENDPOINT="cart:8080" \
-#     DB_HOST="mysql"
-# CMD ["java","-jar","shipping.jar"]
-# CMD ["sleep","1000"]
+# COPY payment.ini .
+# COPY *.py .
+# COPY requirements.txt .
+# RUN pip3 install -r requirements.txt
+# ENV CART_HOST="cart" \
+#     CART_PORT="8080" \
+#     USER_HOST="user" \
+#     USER_PORT="8080" \
+#     AMQP_HOST="rabbitmq" \
+#     AMQP_USER="roboshop" \
+#     AMQP_PASS="roboshop123"
+# CMD ["uwsgi","--ini","payment.ini"]
